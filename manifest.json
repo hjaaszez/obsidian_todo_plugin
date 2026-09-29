@@ -1,0 +1,9 @@
+{
+  "id": "todo-schedule",
+  "name": "TODO Schedule",
+  "version": "0.0.1",
+  "minAppVersion": "1.4.0",
+  "description": "TODOをスケジュールに割り当てて管理する個人用プラグイン(Hello World段階)",
+  "author": "asataninaoki",
+  "isDesktopOnly": false
+}

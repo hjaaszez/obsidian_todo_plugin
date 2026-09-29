@@ -1,0 +1,21 @@
+# 依存パッケージ
+node_modules/
+
+# ビルド成果物(npm run build で生成)
+main.js
+*.map
+
+# プラグインの実データ(日記などの個人情報を含む)
+data.json
+
+# OS・エディタ
+.DS_Store
+.vscode/
+.idea/
+
+# ログ
+*.log
+npm-debug.log*
+
+# Claude Code のローカル設定
+.claude/settings.local.json
