@@ -35,6 +35,18 @@ export default class TodoSchedulePlugin extends Plugin {
       },
     });
     this.addSettingTab(new TodoScheduleSettingTab(this.app, this));
+
+    // 他端末の変更(iCloud等)を取り込むきっかけ: アプリ復帰時 / 定期 / 起動直後
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") void this.store.syncFromDisk();
+    });
+    this.registerInterval(window.setInterval(() => void this.store.syncFromDisk(), 60_000));
+    this.app.workspace.onLayoutReady(() => void this.store.syncFromDisk());
+  }
+
+  /** Obsidianが「data.jsonが外部(同期)で更新された」と検知したとき */
+  onExternalSettingsChange() {
+    void this.store.syncFromDisk();
   }
 
   async onunload() {

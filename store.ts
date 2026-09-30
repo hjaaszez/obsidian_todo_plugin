@@ -1,10 +1,11 @@
 import { Plugin } from "obsidian";
-import { DEFAULT_SETTINGS, PluginData, ScheduleEntry, Todo } from "./types";
+import { canon, mergeData, normalizeData, sig } from "./merge";
+import { PluginData, ScheduleEntry, Todo } from "./types";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
 export class Store {
-  data: PluginData = { todos: [], scheduleEntries: [], note: "", diaries: {}, settings: { ...DEFAULT_SETTINGS } };
+  data: PluginData = canon(normalizeData(null));
   /** 日記をMarkdownへ書き出す処理(main.tsが設定する) */
   exporter: ((date: string) => Promise<void>) | null = null;
 
@@ -17,19 +18,7 @@ export class Store {
 
   async load() {
     const raw = (await this.plugin.loadData()) as Partial<PluginData> | null;
-    this.data = {
-      // 旧データ(isRoutine等が無い)も読めるよう補完する
-      todos: (raw?.todos ?? []).map((t) => ({
-        ...t,
-        isRoutine: t.isRoutine ?? false,
-        doneDates: t.doneDates ?? [],
-        memo: t.memo ?? "",
-      })),
-      scheduleEntries: raw?.scheduleEntries ?? [],
-      note: raw?.note ?? "",
-      diaries: raw?.diaries ?? {},
-      settings: { ...DEFAULT_SETTINGS, ...(raw?.settings ?? {}) },
-    };
+    this.data = canon(normalizeData(raw));
   }
 
   onChange(fn: () => void) {
@@ -47,12 +36,34 @@ export class Store {
     this.timer = window.setTimeout(() => this.saveNow(), 300);
   }
 
+  /** 保存前に他端末の変更を取り込んでから書く(iCloud等で別端末が更新していても消さない) */
   private async saveNow() {
     if (this.timer !== null) {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
+    await this.mergeFromDisk();
     await this.plugin.saveData(this.data);
+  }
+
+  /**
+   * data.json を読み直し、手元のデータへマージする。
+   * 戻り値: マージ結果がディスクの内容と異なる(=ディスクに書き戻す必要がある)か
+   */
+  private async mergeFromDisk(): Promise<boolean> {
+    const raw = (await this.plugin.loadData()) as Partial<PluginData> | null;
+    if (!raw) return false;
+    const remote = canon(normalizeData(raw));
+    const before = sig(this.data);
+    const merged = mergeData(this.data, remote);
+    this.data = merged;
+    if (sig(merged) !== before) this.listeners.forEach((fn) => fn()); // 画面を更新
+    return sig(merged) !== sig(remote);
+  }
+
+  /** 他端末(同期)の変更を取り込む。手元にしかない変更があればディスクへ反映する */
+  async syncFromDisk() {
+    if (await this.mergeFromDisk()) await this.saveNow();
   }
 
   /** 保存待ち・書き出し待ちを即時実行する */
@@ -124,6 +135,7 @@ export class Store {
       doneDates: [],
       memo: "",
       createdAt: new Date().toISOString(),
+      updatedAt: Date.now(),
     };
     this.data.todos.push(todo);
     this.commit();
@@ -135,6 +147,7 @@ export class Store {
     title = title.trim();
     if (!t || !title || t.title === title) return;
     t.title = title;
+    t.updatedAt = Date.now();
     this.commit();
   }
 
@@ -146,6 +159,7 @@ export class Store {
     } else {
       t.isDone = !t.isDone;
     }
+    t.updatedAt = Date.now();
     this.commit();
   }
 
@@ -161,6 +175,7 @@ export class Store {
     t.isRoutine = on;
     t.isDone = false;
     t.doneDates = [];
+    t.updatedAt = Date.now();
     this.commit();
   }
 
@@ -169,11 +184,14 @@ export class Store {
     const t = this.getTodo(id);
     if (!t) return;
     t.memo = memo;
+    t.updatedAt = Date.now();
     this.scheduleSave();
   }
 
   deleteTodo(id: string) {
     const ids = new Set([id, ...this.data.todos.filter((t) => t.parentId === id).map((t) => t.id)]);
+    const now = Date.now();
+    ids.forEach((i) => (this.data.tombstones[i] = now)); // 他端末にも削除を伝える
     this.data.todos = this.data.todos.filter((t) => !ids.has(t.id));
     this.data.scheduleEntries = this.data.scheduleEntries.filter((e) => !ids.has(e.todoId));
     this.commit();
@@ -188,6 +206,7 @@ export class Store {
   }
 
   unassign(entryId: string) {
+    this.data.tombstones[entryId] = Date.now();
     this.data.scheduleEntries = this.data.scheduleEntries.filter((e) => e.id !== entryId);
     this.commit();
   }
@@ -195,6 +214,7 @@ export class Store {
   /** 入力中の再描画を避けるため通知はしない */
   setNote(note: string) {
     this.data.note = note;
+    this.data.noteUpdatedAt = Date.now();
     this.scheduleSave();
   }
 
@@ -202,12 +222,14 @@ export class Store {
   setDiary(date: string, text: string) {
     if (text.trim()) this.data.diaries[date] = text;
     else delete this.data.diaries[date];
+    this.data.diaryUpdatedAt[date] = Date.now();
     this.scheduleSave();
     this.queueExport(date);
   }
 
   setDiaryFolder(folder: string) {
     this.data.settings.diaryFolder = folder;
+    this.data.settingsUpdatedAt = Date.now();
     this.scheduleSave();
   }
 

@@ -38,7 +38,14 @@ export class TodoScheduleView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("ts-host");
     this.root = this.contentEl.createDiv("ts-root");
-    this.register(this.store.onChange(() => this.render()));
+    this.register(
+      this.store.onChange(() => {
+        // 入力中(テキストエリアにフォーカス中)に同期で再描画すると入力が途切れるので見送る
+        const a = document.activeElement;
+        if (a instanceof HTMLTextAreaElement && this.root.contains(a)) return;
+        this.render();
+      })
+    );
     this.render();
   }
 
